@@ -82,9 +82,9 @@ ENTRY(stext)
         /* .macro  store_primary_cpu_mode  reg1, reg2, reg3 
          * mrs     \reg1, cpsr                     @ reg1 = cpsr 
          * and     \reg1, \reg1, #MODE_MASK        @ reg1 = cpsr & 0x1f
-         * adr     \reg2, .L__boot_cpu_mode_offset @ get boot_cpu_mode phys address to reg2
-         * ldr     \reg3, [\reg2]                  @ reg3 = [reg2], reg3 now is boot_cpu_mode physical address
-         * str     \reg1, [\reg2, \reg3]           @ [reg2 + reg3] = reg1
+         * adr     \reg2, .L_boot_cpu_mode_offset @ get L_boot_cpu_mode_offset phys address store to reg2
+         * ldr     \reg3, [\reg2]                  @ reg3 = [reg2] = __boot_cpu_mode - .（the offset between __boot_cpu_mode & L_boot_cpu_mode_offset）
+         * str     \reg1, [\reg2, \reg3]           @ [reg2 + reg3] = reg1, this means __boot_cpu_mode = reg1 = cpsr & 0x1f
          * .endm
          */
         bl      __hyp_stub_install
