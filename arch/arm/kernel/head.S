@@ -30,7 +30,7 @@
  * the least significant 16 bits to be 0x8000, but we could probably
  * relax this restriction to KERNEL_RAM_VADDR >= PAGE_OFFSET + 0x4000.
  */
-/* KERNEL_RAM_VADDR = 0x80000000 + 0x8000*/
+/* KERNEL_RAM_VADDR = 0xC0000000 + 0x8000*/
 #define KERNEL_RAM_VADDR        (PAGE_OFFSET + TEXT_OFFSET)
 #if (KERNEL_RAM_VADDR & 0xffff) != 0x8000
 #error KERNEL_RAM_VADDR must start at 0xXXXX8000
@@ -41,7 +41,7 @@
 
         /* swapper_pg_dir = 0x80004000 */
         .globl  swapper_pg_dir
-        .equ    swapper_pg_dir, KERNEL_RAM_VADDR - PG_DIR_SIZE @swapper_pg_dir = 0x80004000
+        .equ    swapper_pg_dir, KERNEL_RAM_VADDR - PG_DIR_SIZE @swapper_pg_dir = 0xC0004000
 
         .macro  pgtbl, rd, phys
         add     \rd, \phys, #TEXT_OFFSET @rd = phys + 0x8000
@@ -87,9 +87,33 @@ ENTRY(stext)
          * str     \reg1, [\reg2, \reg3]           @ [reg2 + reg3] = reg1, this means __boot_cpu_mode = reg1 = cpsr & 0x1f
          * .endm
          */
-        bl      __hyp_stub_install
+        bl      __hyp_stub_install  @ from the comments, we konw now __boot_cpu_mode saves the cpu current mode.
 #endif
         @ ensure svc mode and all interrupts masked
+        @ .macro safe_svcmode_maskall reg:req
+        @ #if __LINUX_ARM_ARCH__ >= 6 && !defined(CONFIG_CPU_V7M)
+        @       mrs     \reg , cpsr              @ reg = cpsr
+        @       eor     \reg, \reg, #HYP_MODE    @ reg = reg ^ HYP_MODE(0x1a)
+        @       tst     \reg, #MODE_MASK         @ reg ^ MODE_MASK(0x1f), notes will upate flags
+        @       bic     \reg , \reg , #MODE_MASK @ clr bit0-4
+        @       orr     \reg , \reg , #PSR_I_BIT | PSR_F_BIT | SVC_MODE @ set disable IRQ/FIQ, force mode to SVC
+        @       THUMB(  orr     \reg , \reg , #PSR_T_BIT        ) @ do nothing in arm mode
+        @       bne     1f 
+        @       orr     \reg, \reg, #PSR_A_BIT
+        @       badr    lr, 2f
+        @       msr     spsr_cxsf, \reg @ the operand to msr here is SPSR_<fields>, where <fields> "Is a sequence of one or more of" c, x, s, f, which represent bits 7:0, 15:8, 23:16 and 31:24 respectively.
+        @       __MSR_ELR_HYP(14)
+        @       __ERET
+        @ 1:      msr     cpsr_c, \reg @ cpsr_c = reg
+        @ 2:
+        @ #else
+        @       /*
+        @        * workaround for possibly broken pre-v6 hardware
+        @        * (akita, Sharp Zaurus C-1000, PXA270-based)
+        @        */
+        @       setmode PSR_F_BIT | PSR_I_BIT | SVC_MODE, \reg
+        @ #endif
+        @ .endm
         safe_svcmode_maskall r9
 
         mrc     p15, 0, r9, c0, c0              @ get processor id
@@ -97,3 +121,27 @@ ENTRY(stext)
         movs    r10, r5                         @ invalid processor (r5=0)?
  THUMB( it      eq )            @ force fixup-able long branch encoding
         beq     __error_p                       @ yes, error 'p'
+
+        @ LPAE/.......
+        .......
+#ifndef CONFIG_XIP_KERNEL
+        adr     r3, 2f
+        ldmia   r3, {r4, r8}
+        sub     r4, r3, r4                      @ (PHYS_OFFSET - PAGE_OFFSET)
+        add     r8, r8, r4                      @ PHYS_OFFSET =0x80000000
+#else
+        ldr     r8, =PLAT_PHYS_OFFSET           @ always constant in this case
+#endif
+        
+        /*
+         * r1 = machine no, r2 = atags or dtb,
+         * r8 = phys_offset, r9 = cpuid, r10 = procinfo
+         */
+        bl      __vet_atags  @@ check r2 valid, if not valid, r2 will be set as 0
+#ifdef CONFIG_SMP_ON_UP
+        bl      __fixup_smp  @@actually do nothing for armv7
+#endif
+#ifdef CONFIG_ARM_PATCH_PHYS_VIRT
+        bl      __fixup_pv_table @@
+#endif
+        bl      __create_page_tables
